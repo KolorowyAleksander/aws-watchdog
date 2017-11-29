@@ -2,6 +2,7 @@
 import argparse
 import subprocess
 import time
+import threading
 
 import boto3
 from botocore.exceptions import EndpointConnectionError
@@ -20,13 +21,40 @@ def main():
    
     fetcher = ConfigFetcher(args.id, TABLE_NAME)
     # First run check if the config is correct and die if it's not.
-    config = fetcher.get_config()
+    try:
+        config = fetcher.get_config()
+    except KeyError:
+        print('such a configuration doesn\'t exist in the database')
+        exit(1)
+    except EndpointConnectionError as err:
+        print('no connection' + err.msg)
+        exit(1)
+    except:
+        print('some other kind of error')
+        exit(1)
 
-    while True:
-        config = fetcher.get_config() 
+    # this part should be ran as a daemon
+    while True:   
+        config = fetcher.get_config()
 
-        for service in config['listOfServices']:
-          print(run_service_command(service, 'status'), service)
+        retries = int(config['numOfAttempts'])
+        wait_time = int(config['numOfSecWait'])
+        service_statuses = dict.fromkeys(config['listOfServices'], False)
+        
+        for service_name in service_statuses.keys():
+            if (not run_service_command(service_name, 'status')
+                and service_statuses[service_name] == False):
+                # service down and not being restarted
+                print(f'{service_name} is down')
+                
+                child = threading.Thread(target=restart_service_with_retries,
+                                         args=(service_name,
+                                               service_statuses,
+                                               retries,
+                                               wait_time))
+                child.start() 
+            else:
+                print(f'{service_name} is running') 
         
         time.sleep(config['numOfSecCheck'])
 
@@ -47,10 +75,27 @@ def run_service_command(service_name: str, cmd: str):
         return False
 
 
+def restart_service_with_retries(service_name: str, 
+                                 service_statuses: dict,
+                                 retries: int,
+                                 wait_time: int):
+    service_statuses[service_name] = True  # service is being restarted
+    for tries in range(retries):
+        if run_service_command(service_name, 'restart'):
+            print(f'the retry for {service_name} succeded after {tries+1} times')
+            service_statuses[service_name] = False
+            return
+        elif tries != retries:  # try again
+            time.sleep(wait_time) 
+        else:
+            print(f'could not restart {service_name} after {retries} times')
+            service_statuses[service_name] = False
+
+
 class ConfigFetcher:
     def __init__(self, id: str, table_name: str):
-        """Returns up to date config,
-         fetching from DB when older than 15min (when get_config is called).
+        """Returns up to date config, lazily
+        fetching from DB when older than 15min (when get_config is called).
         
         Params:
             id(str): id of the db row with requested config
