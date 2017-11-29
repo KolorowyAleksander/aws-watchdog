@@ -19,33 +19,38 @@ def main():
     args = parser.parse_args()
    
     fetcher = ConfigFetcher(args.id, TABLE_NAME)
-    
-    config = fetcher.get_config() 
-    
-    for service in config['listOfServices']:
-        print(is_service_running(service), service)
+    # First run check if the config is correct and die if it's not.
+    config = fetcher.get_config()
+
+    while True:
+        config = fetcher.get_config() 
+
+        for service in config['listOfServices']:
+          print(run_service_command(service, 'status'), service)
+        
+        time.sleep(config['numOfSecCheck'])
 
 
-def is_service_running(name: str):
-    # This assumes the services are running under systemctl
-    res = subprocess.run(['systemctl', 'status', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return True if res.returncode == 0 else False
-
-
-def restart_service(name: str):
+def run_service_command(service_name: str, cmd: str):
+    """Run a shell command to check services.
+    Returns:
+        True: if the command succeded (0 return code)
+        False: if the command didn't succeed or the shell call broke.
+    """
     # This assumes the services are running under systemctl
     try:
-        res = subprocess.run(['systemctl', 'restart', name],
+        res = subprocess.run(['systemctl', cmd, service_name],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
         return True if res.returncode == 0 else False
-    except SubprocessError:
+    except subprocess.SubprocessError:
         return False
 
 
 class ConfigFetcher:
     def __init__(self, id: str, table_name: str):
-        """Returns up to date config, fetching from DB when older than 15min.
+        """Returns up to date config,
+         fetching from DB when older than 15min (when get_config is called).
         
         Params:
             id(str): id of the db row with requested config
