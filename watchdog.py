@@ -11,7 +11,12 @@ import boto3
 from botocore.exceptions import EndpointConnectionError
 
 # constants
+PROG_NAME = 'aws-watchdog'
+LOGGER_NAME = f'{PROG_NAME}.daemon'
+
 TABLE_NAME = 'aszymanski-watchdog-table'
+SNS_TOPIC = 'arn:aws:sns:us-west-2:632826021673:aszymanski-watchdog-topic'
+
 LOG_FILE = '/var/log/aws-watchdog.log'
 PID_FILE = '/var/run/aws-watchdog.pid'
 
@@ -40,7 +45,7 @@ class ConfigFetcher:
         """Requests a row from db with the required config.
         Raises:
              KeyError: when the config row doesn't exist
-             EndpointConnectionError: when there is no connection to the database
+             EndpointConnectionError: when connection to the db is down
         """
         if (self._lastUpdated is None
             or time.time() - self._lastUpdated > 900):
@@ -49,22 +54,32 @@ class ConfigFetcher:
         return self._config
 
 
+class SNSHandler(logging.Handler):
+    """A logging handler which sends messages to SNS"""
+    def __init__(self, level=logging.NOTSET):
+        super().__init__(level)
+        self._client = boto3.client('sns')
+        self._logger = logging.getLogger(f'{PROG_NAME}.SNSHandler')
+
+    def emit(self, record: logging.LogRecord):
+        msg = f'{record.created}[{record.levelname}]:{record.msg}'
+        try:
+            self._client.publish(TopicArn = SNS_TOPIC,
+                                 Message = record.msg)
+        except EndpointConnectionError:
+            self._logger.error('Error when publishing message to sns')
+
+
 def run_daemon(fetcher: ConfigFetcher):
-    logger = logging.getLogger('aws-watchdog')
-
-    logger.setLevel(logging.INFO)
-
-    formatstring = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    formatter = logging.Formatter(formatstring)
-
-    handler = logging.FileHandler(LOG_FILE)
-    handler.setFormatter(formatter)
-
-    logger.addHandler(handler)
+    init_loggers()
+    logger = logging.getLogger(LOGGER_NAME)
 
     running_threads = dict()
     while True:
-        config = fetcher.get_config()
+        try:
+            config = fetcher.get_config()
+        except EndpointConnectionError as e:
+            logger.warn('Can\'t update configuration: dynamodb unavailable')
 
         iteration_time = config['numOfSecCheck']
         retries = int(config['numOfAttempts'])
@@ -87,18 +102,34 @@ def run_daemon(fetcher: ConfigFetcher):
                                                retry_wait_time))
                 child.start()
                 running_threads[service_name] = child
-            elif service_name in running_threads:
-                logger.info(f'{service_name} is being restarted')
-            else:
-                logger.info(f'{service_name} is running')
 
         time.sleep(iteration_time)
+
+
+def init_loggers():
+    # Root logger logs only to file
+    logger = logging.getLogger(PROG_NAME)
+    logger.setLevel(logging.INFO)
+
+    formatstring = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(formatstring)
+
+    file_handler = logging.FileHandler(LOG_FILE)
+    file_handler.setFormatter(formatter)
+
+    sns_handler = SNSHandler(level=logging.INFO)
+
+    logger.addHandler(file_handler)
+    
+    # This logger logs to both file/sns 
+    program_logger = logging.getLogger(LOGGER_NAME)
+    program_logger.addHandler(sns_handler)
 
 
 def restart_service_with_retries(service_name: str,
                                  retries: int,
                                  wait_time: int):
-    logger = logging.getLogger('aws-watchdog')
+    logger = logging.getLogger(LOGGER_NAME)
     for tries in range(1, retries+1):
         if run_service_command(service_name, 'restart'):
             logger.info(f'{service_name} restarted after {tries} times')
@@ -132,13 +163,13 @@ def check_for_config(fetcher: ConfigFetcher):
     try:
         config = fetcher.get_config()
     except KeyError:
-        print('such a configuration doesn\'t exist in the database')
+        print('Can\'t start daemon: wrong configuration')
         exit(1)
     except EndpointConnectionError as err:
-        print('no connection' + err.msg)
+        print('Cannot connect to the DynamoDB instance, terminating')
         exit(1)
     except:
-        print('some other kind of error')
+        print('Unexpected error happened')
         exit(1)
 
 
@@ -146,7 +177,7 @@ def main():
     # parse arguments
     description = 'Watchdog for checking services statuses'
     id_help = 'Id of the DynamoDB row with required configuration'
-    parser = argparse.ArgumentParser(prog='watchdog', description=description)
+    parser = argparse.ArgumentParser(prog=PROG_NAME, description=description)
     parser.add_argument('id', help=id_help)
     args = parser.parse_args()
   
@@ -160,6 +191,7 @@ def main():
     # this part should be ran as a daemon
     with daemon.DaemonContext(pidfile=pidfile.TimeoutPIDLockFile(PID_FILE)) as context:
         run_daemon(fetcher)
+
 
 if __name__ == '__main__':
     main()
