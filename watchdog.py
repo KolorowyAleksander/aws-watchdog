@@ -64,8 +64,8 @@ class SNSHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         msg = f'{record.created}[{record.levelname}]:{record.msg}'
         try:
-            self._client.publish(TopicArn = SNS_TOPIC,
-                                 Message = record.msg)
+            self._client.publish(TopicArn=SNS_TOPIC,
+                                 Message=record.msg)
         except EndpointConnectionError:
             self._logger.error('Error when publishing message to sns')
 
@@ -78,7 +78,7 @@ def run_daemon(fetcher: ConfigFetcher):
     while True:
         try:
             config = fetcher.get_config()
-        except EndpointConnectionError as e:
+        except EndpointConnectionError: 
             logger.warn('Can\'t update configuration: dynamodb unavailable')
 
         iteration_time = config['numOfSecCheck']
@@ -87,7 +87,9 @@ def run_daemon(fetcher: ConfigFetcher):
         services = config['listOfServices']
 
         # update running threads
-        for name in [n for n, t in running_threads.items() if not t.is_alive()]:
+        for name in [n for n, t
+                     in running_threads.items()
+                     if not t.is_alive()]:
             del running_threads[name]
 
         for service_name in services:
@@ -95,7 +97,7 @@ def run_daemon(fetcher: ConfigFetcher):
                 and service_name not in running_threads):
                 # service down and not being restarted
                 logger.info(f'{service_name} is down')
-                
+
                 child = threading.Thread(target=restart_service_with_retries,
                                          args=(service_name,
                                                retries,
@@ -120,8 +122,8 @@ def init_loggers():
     sns_handler = SNSHandler(level=logging.INFO)
 
     logger.addHandler(file_handler)
-    
-    # This logger logs to both file/sns 
+
+    # This logger logs to both file/sns
     program_logger = logging.getLogger(LOGGER_NAME)
     program_logger.addHandler(sns_handler)
 
@@ -168,7 +170,7 @@ def check_for_config(fetcher: ConfigFetcher):
     except EndpointConnectionError as err:
         print('Cannot connect to the DynamoDB instance, terminating')
         exit(1)
-    except:
+    except Exception:
         print('Unexpected error happened')
         exit(1)
 
@@ -180,8 +182,8 @@ def main():
     parser = argparse.ArgumentParser(prog=PROG_NAME, description=description)
     parser.add_argument('id', help=id_help)
     args = parser.parse_args()
-  
-    # initiate logging 
+
+    # initiate logging
     fetcher = ConfigFetcher(args.id, TABLE_NAME)
 
     # exits if config is invalid
@@ -189,10 +191,10 @@ def main():
     check_for_config(fetcher)
 
     # this part should be ran as a daemon
-    with daemon.DaemonContext(pidfile=pidfile.TimeoutPIDLockFile(PID_FILE)) as context:
+    pidf = pidfile.TimeoutPIDLockFile(PID_FILE)
+    with daemon.DaemonContext(pidfile=pidf) as context:
         run_daemon(fetcher)
 
 
 if __name__ == '__main__':
     main()
-
