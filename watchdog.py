@@ -5,12 +5,15 @@ import time
 import threading
 import logging
 
+import daemon
+from daemon import pidfile
 import boto3
 from botocore.exceptions import EndpointConnectionError
 
 # constants
 TABLE_NAME = 'aszymanski-watchdog-table'
 LOG_FILE = '/var/log/aws-watchdog.log'
+PID_FILE = '/var/run/aws-watchdog.pid'
 
 
 class ConfigFetcher:
@@ -49,11 +52,21 @@ class ConfigFetcher:
 def run_daemon(fetcher: ConfigFetcher):
     logger = logging.getLogger('aws-watchdog')
 
+    logger.setLevel(logging.INFO)
+
+    formatstring = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(formatstring)
+
+    handler = logging.FileHandler(LOG_FILE)
+    handler.setFormatter(formatter)
+
+    logger.addHandler(handler)
+
     running_threads = dict()
     while True:
         config = fetcher.get_config()
 
-        iteration_time = 10 #config['numOfSecCheck']
+        iteration_time = config['numOfSecCheck']
         retries = int(config['numOfAttempts'])
         retry_wait_time = int(config['numOfSecWait'])
         services = config['listOfServices']
@@ -138,13 +151,6 @@ def main():
     args = parser.parse_args()
   
     # initiate logging 
-    logger = logging.getLogger('aws-watchdog')
-    logger.setLevel(logging.INFO)
-    handler = logging.FileHandler(LOG_FILE)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
     fetcher = ConfigFetcher(args.id, TABLE_NAME)
 
     # exits if config is invalid
@@ -152,7 +158,8 @@ def main():
     check_for_config(fetcher)
 
     # this part should be ran as a daemon
-    run_daemon(fetcher)
+    with daemon.DaemonContext(pidfile=pidfile.TimeoutPIDLockFile(PID_FILE)) as context:
+        run_daemon(fetcher)
 
 if __name__ == '__main__':
     main()
