@@ -60,14 +60,14 @@ class RotatingTimedS3FileHandler(TimedRotatingFileHandler):
     """A rorating timed log handler which also uploads the logs to S3"""
     def doRollover(self):
         # upload the file to s3 then continue logging
-        
-        name = time.strftime(self.suffix, 
+
+        name = time.strftime(self.suffix,
                              time.gmtime(self.rolloverAt - self.interval))
 
         s3 = boto3.client('s3')
         s3.upload_file(self.baseFilename, S3_BUCKET_NAME, name + '.log')
 
-        super().doRollover() 
+        super().doRollover()
 
 
 class SNSHandler(logging.Handler):
@@ -94,7 +94,7 @@ def run_daemon(fetcher: ConfigFetcher):
     while True:
         try:
             config = fetcher.get_config()
-        except EndpointConnectionError: 
+        except EndpointConnectionError:
             logger.warn('Can\'t update configuration: dynamodb unavailable')
 
         iteration_time = 10  # config['numOfSecCheck']
