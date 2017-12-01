@@ -200,6 +200,16 @@ def check_for_config(fetcher: ConfigFetcher):
         exit(1)
 
 
+def check_for_logdir():
+    """Checks if log dir exists, and tries to create, else exits"""
+    dir_name = os.path.dirname(LOG_FILE)
+    os.makedirs(dir_name)
+
+    if not os.path.exists(dir_name):
+        print(f'{dir_name} doesn\'t exist, cannot run the daemon')
+        exit(1)
+
+
 def main():
     # parse arguments
     description = 'Watchdog for checking services statuses'
@@ -211,9 +221,9 @@ def main():
     # initiate logging
     fetcher = ConfigFetcher(args.id, TABLE_NAME)
 
-    # exits if config is invalid
     # this would not work like that if started for example from init.d
     check_for_config(fetcher)
+    check_for_logfile()
 
     # this part should be ran as a daemon
     pidf = pidfile.TimeoutPIDLockFile(PID_FILE)
