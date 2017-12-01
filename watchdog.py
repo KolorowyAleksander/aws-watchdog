@@ -4,6 +4,7 @@ import subprocess
 import time
 import threading
 import logging
+from logging.handlers import TimedRotatingFileHandler
 
 import daemon
 from daemon import pidfile
@@ -16,8 +17,9 @@ LOGGER_NAME = f'{PROG_NAME}.daemon'
 
 TABLE_NAME = 'aszymanski-watchdog-table'
 SNS_TOPIC = 'arn:aws:sns:us-west-2:632826021673:aszymanski-watchdog-topic'
+S3_BUCKET_NAME = 'aszymanski-watchdog-s3'
 
-LOG_FILE = '/var/log/aws-watchdog.log'
+LOG_FILE = '/var/log/aws-watchdog/watchdog.log'
 PID_FILE = '/var/run/aws-watchdog.pid'
 
 
@@ -54,6 +56,20 @@ class ConfigFetcher:
         return self._config
 
 
+class RotatingTimedS3FileHandler(TimedRotatingFileHandler):
+    """A rorating timed log handler which also uploads the logs to S3"""
+    def doRollover(self):
+        # upload the file to s3 then continue logging
+        
+        name = time.strftime(self.suffix, 
+                             time.gmtime(self.rolloverAt - self.interval))
+
+        s3 = boto3.client('s3')
+        s3.upload_file(self.baseFilename, S3_BUCKET_NAME, name + '.log')
+
+        super().doRollover() 
+
+
 class SNSHandler(logging.Handler):
     """A logging handler which sends messages to SNS"""
     def __init__(self, level=logging.NOTSET):
@@ -81,7 +97,7 @@ def run_daemon(fetcher: ConfigFetcher):
         except EndpointConnectionError: 
             logger.warn('Can\'t update configuration: dynamodb unavailable')
 
-        iteration_time = config['numOfSecCheck']
+        iteration_time = 10  # config['numOfSecCheck']
         retries = int(config['numOfAttempts'])
         retry_wait_time = int(config['numOfSecWait'])
         services = config['listOfServices']
@@ -116,12 +132,21 @@ def init_loggers():
     formatstring = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     formatter = logging.Formatter(formatstring)
 
-    file_handler = logging.FileHandler(LOG_FILE)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    # This handler will push logs to s3 every hour
+    file_handler = RotatingTimedS3FileHandler(LOG_FILE,
+                                              when="h",
+                                              interval=1,
+                                              backupCount=5)
+
     file_handler.setFormatter(formatter)
 
     sns_handler = SNSHandler(level=logging.INFO)
 
     logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
 
     # This logger logs to both file/sns
     program_logger = logging.getLogger(LOGGER_NAME)
