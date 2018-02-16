@@ -223,7 +223,7 @@ def main():
 
     # this would not work like that if started for example from init.d
     check_for_config(fetcher)
-    check_for_logfile()
+    check_for_logdir()
 
     # this part should be ran as a daemon
     pidf = pidfile.TimeoutPIDLockFile(PID_FILE)
